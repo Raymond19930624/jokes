@@ -127,11 +127,31 @@ html,body{height:100%;overflow:hidden;background:#0d0d0d;color:#f0f0f0;font-fami
 .joke-card-col{
   background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;
   padding:14px;border-top:2px solid rgba(255,225,53,.2);
+  transition:border-color .2s;
 }
+.joke-card-col.shared{border-top-color:rgba(100,200,100,.4);opacity:.65;}
 .joke-card-col .jcat{font-size:0.65rem;color:#ffe135;font-weight:700;margin-bottom:6px;opacity:.7;}
 .joke-card-col .jq{font-size:0.88rem;color:#ccc;line-height:1.6;white-space:pre-line;margin-bottom:8px;}
-.joke-card-col .ja{font-size:0.88rem;color:#ffe135;font-weight:700;line-height:1.5;}
+.joke-card-col .ja{font-size:0.88rem;color:#ffe135;font-weight:700;line-height:1.5;margin-bottom:12px;}
+.joke-actions{display:flex;gap:8px;margin-top:10px;}
+.btn-copy,.btn-share{
+  flex:1;padding:7px 10px;border-radius:8px;border:none;
+  cursor:pointer;font-family:inherit;font-size:0.78rem;font-weight:700;
+  transition:all .15s;
+}
+.btn-copy{background:#1e1e1e;color:#aaa;border:1px solid #333;}
+.btn-copy:active,.btn-copy.copied{background:#222;color:#ffe135;border-color:#ffe135;}
+.btn-share{background:#0a1a0a;color:#55cc55;border:1px solid #1a3a1a;}
+.btn-share.shared{background:#0d2a0d;color:#44aa44;border-color:#2a5a2a;}
+.btn-share:active{opacity:.7;}
 #no-collection{text-align:center;padding:60px 20px;color:#444;grid-column:1/-1;}
+.share-filter{display:flex;gap:6px;padding:0 16px 10px;flex-shrink:0;}
+.share-filter button{
+  background:#1a1a1a;color:#666;border:1px solid #2a2a2a;
+  border-radius:99px;padding:4px 12px;cursor:pointer;
+  font-family:inherit;font-size:0.75rem;
+}
+.share-filter button.active{background:#333;color:#f0f0f0;border-color:#555;}
 </style>
 </head>
 <body>
@@ -190,6 +210,11 @@ html,body{height:100%;overflow:hidden;background:#0d0d0d;color:#f0f0f0;font-fami
   <!-- COLLECTION -->
   <div id="collection-view">
     <div id="collection-cats"></div>
+    <div class="share-filter">
+      <button id="sf-all" class="active" onclick="setShareFilter('all')">全部</button>
+      <button id="sf-unshared" onclick="setShareFilter('unshared')">未分享 ✨</button>
+      <button id="sf-shared" onclick="setShareFilter('shared')">已分享 ✅</button>
+    </div>
     <div id="collection-grid"></div>
   </div>
 
@@ -609,12 +634,14 @@ async function apiPost(body){
 // ── 狀態 ──────────────────────────────────────────────────────
 let liked=[], rejected=new Set(), queue=[], current=null, revealed=false;
 let pendingSaves=0, currentTab='rate', filterCat='全部';
+let sharedMap={}, shareFilter='all';
 
 // ── 初始化 ────────────────────────────────────────────────────
 async function init(){
   show('loading-msg'); hide('card-area'); hide('error-view'); hide('empty-view');
   try {
-    const [likedData, rejectedData] = await Promise.all([apiGet('getLiked'),apiGet('getRejected')]);
+    const [likedData, rejectedData, sharedData] = await Promise.all([apiGet('getLiked'),apiGet('getRejected'),apiGet('getShared')]);
+    sharedMap = sharedData||{};
     // normalize欄位名稱（防止Sheets回傳的key有空白或大小寫問題）
     liked = (likedData||[]).map(r=>({
       id: String(r.id||r.ID||'').trim(),
@@ -769,18 +796,85 @@ function renderCollection(){
   document.getElementById('collection-cats').innerHTML=cats.map(c=>
     `<button class="cat-filter${c===filterCat?' active':''}" onclick="setCat('${c.replace(/'/g,"\\'")}')">${c}</button>`
   ).join('');
-  const filtered=filterCat==='全部'?liked:liked.filter(j=>j.cat===filterCat);
+
+  let filtered=filterCat==='全部'?liked:liked.filter(j=>j.cat===filterCat);
+  if(shareFilter==='unshared') filtered=filtered.filter(j=>!sharedMap[j.id]);
+  if(shareFilter==='shared') filtered=filtered.filter(j=>!!sharedMap[j.id]);
+
   const grid=document.getElementById('collection-grid');
   if(liked.length===0){grid.innerHTML='<div id="no-collection">還沒有收藏，去評分吧！</div>';return;}
-  grid.innerHTML=filtered.map(j=>`
-    <div class="joke-card-col">
-      <div class="jcat">${j.cat} · ${j.src||''}</div>
+  if(filtered.length===0){grid.innerHTML='<div id="no-collection">這個分類沒有笑話</div>';return;}
+
+  grid.innerHTML=filtered.map(j=>{
+    const isShared=!!sharedMap[j.id];
+    const sharedDate=sharedMap[j.id]||'';
+    const copyText=j.q+'\n\n👉 '+j.a;
+    return `
+    <div class="joke-card-col${isShared?' shared':''}" id="jc-${j.id}">
+      <div class="jcat">${j.cat} · ${j.src||''}${isShared?` · <span style="color:#55cc55;font-size:0.62rem">✅ ${sharedDate}</span>`:''}</div>
       <div class="jq">${j.q.replace(/\n/g,'<br>')}</div>
       <div class="ja">👉 ${j.a}</div>
-    </div>`).join('');
+      <div class="joke-actions">
+        <button class="btn-copy" onclick="copyJoke('${j.id}',this)" data-text="${encodeURIComponent(copyText)}">📋 複製</button>
+        <button class="btn-share${isShared?' shared':''}" onclick="toggleShare('${j.id}',this)">
+          ${isShared?'✅ 已分享':'📤 標記分享'}
+        </button>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function setCat(c){filterCat=c;renderCollection();}
+
+function setShareFilter(f){
+  shareFilter=f;
+  ['all','unshared','shared'].forEach(x=>{
+    const el=document.getElementById('sf-'+x);
+    if(el) el.classList.toggle('active',x===f);
+  });
+  renderCollection();
+}
+
+function copyJoke(id, btn){
+  const text=decodeURIComponent(btn.dataset.text);
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent='✅ 已複製！';
+    btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='📋 複製';btn.classList.remove('copied');},2000);
+  }).catch(()=>{
+    // fallback
+    const ta=document.createElement('textarea');
+    ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent='✅ 已複製！'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='📋 複製';btn.classList.remove('copied');},2000);
+  });
+}
+
+function toggleShare(id, btn){
+  const isShared=!!sharedMap[id];
+  const card=document.getElementById('jc-'+id);
+  if(isShared){
+    delete sharedMap[id];
+    btn.textContent='📤 標記分享'; btn.classList.remove('shared');
+    if(card){ card.classList.remove('shared');
+      const cat=card.querySelector('.jcat');
+      if(cat) cat.innerHTML=cat.innerHTML.replace(/·\s*<span[^>]*>.*?<\/span>/,'');
+    }
+    apiPost({action:'unshare',id}).catch(()=>{});
+  } else {
+    const today=new Date().toLocaleDateString('zh-TW',{month:'numeric',day:'numeric'});
+    sharedMap[id]=today;
+    btn.textContent='✅ 已分享'; btn.classList.add('shared');
+    if(card){ card.classList.add('shared');
+      const cat=card.querySelector('.jcat');
+      if(cat && !cat.querySelector('span')) cat.innerHTML+=` · <span style="color:#55cc55;font-size:0.62rem">✅ ${today}</span>`;
+    }
+    apiPost({action:'share',id,date:today}).catch(()=>{});
+  }
+  if(shareFilter!=='all') setTimeout(()=>renderCollection(),800);
+}
 function show(id){const el=document.getElementById(id);if(el)el.style.display='';}
 function hide(id){const el=document.getElementById(id);if(el)el.style.display='none';}
 
